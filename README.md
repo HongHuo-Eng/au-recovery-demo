@@ -1,7 +1,8 @@
-# Au Recovery Lab — Research Presentation
+# Gold Recovery Research — Interactive Demonstration
 
 An English interactive presentation of real research observations and local
 models. Open index.html locally or use GitHub Pages from main / (root).
+Use the Instructions button for the visitor guide, or open #instructions.
 
 The site provides charts, model comparisons, constrained candidate screening
 and a prospective experiment plan. It does not provide original datasets,

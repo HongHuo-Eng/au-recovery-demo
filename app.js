@@ -84,6 +84,36 @@ function renderEvidence(){
  const sensitivity=(DATA.noise_summary||[]).filter(r=>r.screen==='model_band_constraints');
  if(sensitivity.length){const table=sensitivity.map(r=>{const mean=(DATA.noise_summary||[]).find(x=>x.case_id===r.case_id&&x.scenario===r.scenario&&x.screen==='mean_constraints');return `<tr><td>${r.case_id==='huo_20260518_dose'?'Dose-response case':'Unconfirmed-label case'}</td><td>${esc(r.scenario)}</td><td>Au ≤ ${num(r.thresholds.au_max)}; Cu ≥ ${num(r.thresholds.cu_min)}</td><td>${num(mean?.candidate_x)}</td><td>${r.feasible_count}</td></tr>`}).join('');$('#evidence-view').insertAdjacentHTML('beforeend',`<h2 class="spaced">Do suggestions change with assumed noise?</h2><p class="muted">These fixed offline example thresholds are independent of the current Process settings. Noise SDs of 0.005 and 0.01 in reported units are assumptions, not measured errors.</p><div class="table-scroll"><table><thead><tr><th>Case</th><th>Noise scenario</th><th>Fixed thresholds</th><th>Input selected by mean screening</th><th>Feasible grid points at 1.96σ</th></tr></thead><tbody>${table}</tbody></table></div><p class="note">A model band narrower than the reporting resolution does not imply greater measurement precision. If a candidate depends on the noise assumption, prioritize independent repeats.</p>`);}
 }
-function render(){$$('.tab').forEach(b=>{b.classList.toggle('active',b.dataset.view===state.view);b.setAttribute('aria-current',b.dataset.view===state.view?'page':'false')});$('#workspace').hidden=!['material','process'].includes(state.view);$('#plan-view').hidden=state.view!=='plan';$('#evidence-view').hidden=state.view!=='evidence';if(state.view==='plan')renderPlan();else if(state.view==='evidence')renderEvidence();else{refreshSelect();drawCase();}}
-$$('.tab').forEach(b=>b.addEventListener('click',()=>{if(state.view==='plan'&&$('#plan-ratios'))state.planForm=readPlanForm();state.view=b.dataset.view;render()}));$('#case-select').addEventListener('change',e=>{resetCase(e.target.value);drawCase()});$('#model-select').addEventListener('change',e=>{state.model=e.target.value;drawCase()});$('#target-slider').addEventListener('input',e=>{state.target=+e.target.value;drawCase()});$('#caution-select').addEventListener('change',e=>{state.caution=+e.target.value;drawCase()});$('#conditional-toggle').addEventListener('change',e=>{state.conditional=e.target.checked;drawCase()});$('#channel-select').addEventListener('change',e=>{state.channel=e.target.value;drawCase()});$('#au-max').addEventListener('input',e=>{state.auMax=e.target.value===''?NaN:+e.target.value;drawCase()});$('#cu-min').addEventListener('input',e=>{state.cuMin=e.target.value===''?NaN:+e.target.value;drawCase()});$('#add-plan').addEventListener('click',saveCandidate);
+function render(){
+ const inGuide=state.view==='guide';
+ $$('.tab').forEach(b=>{b.classList.toggle('active',b.dataset.view===state.view);b.setAttribute('aria-current',b.dataset.view===state.view?'page':'false')});
+ $('#workspace').hidden=!['material','process'].includes(state.view);
+ $('#plan-view').hidden=state.view!=='plan';$('#evidence-view').hidden=state.view!=='evidence';
+ $('#guide-view').hidden=!inGuide;$('#guide-intro').hidden=inGuide;
+ $$('[data-open-guide]').forEach(b=>b.setAttribute('aria-expanded',String(inGuide)));
+ if(inGuide)return;
+ if(state.view==='plan')renderPlan();else if(state.view==='evidence')renderEvidence();else{refreshSelect();drawCase();}
+}
+$$('.tab').forEach(b=>b.addEventListener('click',()=>showView(b.dataset.view)));$('#case-select').addEventListener('change',e=>{resetCase(e.target.value);drawCase()});$('#model-select').addEventListener('change',e=>{state.model=e.target.value;drawCase()});$('#target-slider').addEventListener('input',e=>{state.target=+e.target.value;drawCase()});$('#caution-select').addEventListener('change',e=>{state.caution=+e.target.value;drawCase()});$('#conditional-toggle').addEventListener('change',e=>{state.conditional=e.target.checked;drawCase()});$('#channel-select').addEventListener('change',e=>{state.channel=e.target.value;drawCase()});$('#au-max').addEventListener('input',e=>{state.auMax=e.target.value===''?NaN:+e.target.value;drawCase()});$('#cu-min').addEventListener('input',e=>{state.cuMin=e.target.value===''?NaN:+e.target.value;drawCase()});$('#add-plan').addEventListener('click',saveCandidate);
+let guideReturnView='material';
+function showView(next){
+ if(!['material','process','plan','evidence','guide'].includes(next))return;
+ const wasGuide=state.view==='guide';
+ if(state.view==='plan'&&$('#plan-ratios'))state.planForm=readPlanForm();
+ if(next==='guide'&&!wasGuide)guideReturnView=state.view;
+ state.view=next;render();
+ if(next==='guide'){
+  history.replaceState(null,'',location.pathname+location.search+'#instructions');
+  $('#guide-title').focus();
+ }else if(wasGuide){
+  history.replaceState(null,'',location.pathname+location.search);
+  const heading=next==='plan'?$('#plan-view h1'):next==='evidence'?$('#evidence-view h1'):$('#case-title');
+  heading?.setAttribute('tabindex','-1');heading?.focus();
+ }
+}
+$$('[data-open-guide]').forEach(button=>button.addEventListener('click',()=>showView('guide')));
+$('#close-guide').addEventListener('click',()=>showView(guideReturnView));
+$$('[data-guide-view]').forEach(button=>button.addEventListener('click',()=>showView(button.dataset.guideView)));
+if(location.hash==='#instructions')state.view='guide';
+
 render();
