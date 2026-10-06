@@ -1,119 +1,149 @@
 'use strict';
-const DATA=JSON.parse(document.getElementById('presentation-data').textContent),D=window.DemoDecision;
-const state={view:'material',caseId:DATA.cases.find(c=>c.group==='kou')?.id||DATA.cases[0].id,target:95,caution:0,model:'gp',conditional:false,channel:'208.207',auMax:.9,cuMin:1,plan:[],matrix:null};
+const DATA=JSON.parse(document.getElementById('presentation-data').textContent),D=window.ResearchDecision;
 const $=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)];
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const num=(v,n=3)=>Number.isFinite(v)?Number(v).toLocaleString('en-US',{maximumFractionDigits:n}):'—';
-const rawCase=()=>DATA.cases.find(c=>c.id===state.caseId)||DATA.cases[0];
-const currentCase=()=>D.resolveChannel(rawCase(),state.channel);
-const options=()=>({model:state.model,caution:state.caution,targetPercent:state.target,allowConditional:state.conditional,auMax:state.auMax,cuMin:state.cuMin});
-const units=c=>c.x.unit==='mass ratio'?'':c.x.unit;
-const listText=v=>typeof v==='string'?v:v.text_zh||v.message||JSON.stringify(v);
-
-function groupCases(){return DATA.cases.filter(c=>c.group===(state.view==='process'?'huo':'kou'));}
-function resetCase(id){state.caseId=id;state.conditional=false;state.channel='208.207';state.model='gp';state.caution=0;const c=rawCase();state.auMax=c.conditional_only?.09:.9;state.cuMin=c.conditional_only?2.3:1;}
-function refreshSelect(){const cases=groupCases(),shortNames={kou_cs_go_ratio:'Material ratio · 5 conditions',huo_20260518_dose:'Dosage · 3 conditions',huo_20260602_label:'Unconfirmed labels · 5 conditions'};if(!cases.some(c=>c.id===state.caseId)&&cases.length)resetCase(cases[0].id);$('#case-select').innerHTML=cases.map(c=>`<option value="${esc(c.id)}">${esc(shortNames[c.id]||c.title_zh)}</option>`).join('');$('#case-select').value=state.caseId;}
-function plotBase(c){return{margin:{l:77,r:30,t:47,b:64},font:{family:'Segoe UI, Microsoft YaHei, Arial',size:13,color:'#526176'},paper_bgcolor:'#fff',plot_bgcolor:'#fff',xaxis:{title:{text:c.x.label+(units(c)?` (${units(c)})`:'')},range:[c.x.range[0],c.x.range[1]],gridcolor:'#edf1f6',zeroline:false},yaxis:{title:{text:c.y.label+(c.y.unit?` (${c.y.unit})`:'')},gridcolor:'#edf1f6',zeroline:false},legend:{orientation:'h',y:1.18,x:0,font:{size:12}},hovermode:'closest',uirevision:c.id+state.channel+state.model};}
+const n=(x,d=3)=>Number.isFinite(x)?Number(x).toLocaleString('en-US',{maximumFractionDigits:d}):'—';
+const axis=a=>a.label+(a.unit&&a.unit!=='mass ratio'?' ('+a.unit+')':'');
+const S={view:'models',caseId:DATA.cases[0].id,method:'gp',inspectIndex:0,band:true,tradeId:'dosage',tradeMethod:'gp',manualKey:null,memo:[],planForm:null,plan:null,trade:null,lastView:'models'};
 const plotConfig={responsive:true,displaylogo:false,displayModeBar:false};
-function drawResponse(c,r){
- const traces=[],grid=r.points||[];
- if(r.model!=='observed'&&grid.length){
-  if(r.model==='gp')traces.push({x:grid.map(p=>p.x),y:grid.map(p=>p.mean+1.96*p.std),mode:'lines',line:{width:0},hoverinfo:'skip',showlegend:false},{x:grid.map(p=>p.x),y:grid.map(p=>p.mean-1.96*p.std),mode:'lines',line:{width:0},fill:'tonexty',fillcolor:'rgba(53,111,181,.13)',name:'Mean ±1.96 × model SD',hoverinfo:'skip'});
-  traces.push({x:grid.map(p=>p.x),y:grid.map(p=>p.mean),mode:'lines',line:{color:'#356fb5',width:2.5},name:D.names[r.model]});
+const caseById=id=>DATA.cases.find(c=>c.id===id),activeCase=()=>caseById(S.caseId),profile=()=>DATA.profiles.find(p=>p.id===S.tradeId);
+function table(headers,rows){return '<table><thead><tr>'+headers.map(h=>'<th>'+esc(h)+'</th>').join('')+'</tr></thead><tbody>'+rows.map(r=>'<tr>'+r.map(v=>'<td>'+v+'</td>').join('')+'</tr>').join('')+'</tbody></table>';}
+function basePlot(x,y){return {margin:{l:80,r:28,t:60,b:74},font:{family:'Segoe UI,Arial,sans-serif',size:12,color:'#526176'},paper_bgcolor:'#fff',plot_bgcolor:'#fff',xaxis:{title:{text:x,standoff:14},gridcolor:'#e9eef5',zeroline:false,automargin:true},yaxis:{title:{text:y,standoff:12},gridcolor:'#e9eef5',zeroline:false,automargin:true},legend:{orientation:'h',x:0,y:1.2,font:{size:11}},hovermode:'closest'};}
+function optionGroups(){
+ const categories=[...new Set(DATA.cases.map(c=>c.category))];
+ $('#model-case').innerHTML=categories.map(cat=>`<optgroup label="${esc(cat)}">${DATA.cases.filter(c=>c.category===cat).map(c=>`<option value="${esc(c.id)}">${esc(c.title)} · ${c.observations.length} settings</option>`).join('')}</optgroup>`).join('');
+ $('#model-case').value=S.caseId;
+ $('#trade-case').innerHTML=DATA.profiles.map(p=>`<option value="${esc(p.id)}">${esc(p.title)}</option>`).join('');$('#trade-case').value=S.tradeId;
+}
+function modelPlot(c,rows,picked){
+ const traces=[];
+ if(S.method!=='observed'){
+  if(S.method==='gp'&&S.band){traces.push({x:rows.map(p=>p.x),y:rows.map(p=>p.y+1.96*p.sd),mode:'lines',line:{width:0},showlegend:false,hoverinfo:'skip'},
+   {x:rows.map(p=>p.x),y:rows.map(p=>p.y-1.96*p.sd),mode:'lines',line:{width:0},fill:'tonexty',fillcolor:'rgba(52,111,174,.14)',name:'Mean ±1.96 × model SD',hoverinfo:'skip'});}
+  traces.push({x:rows.map(p=>p.x),y:rows.map(p=>p.y),mode:'lines',line:{color:'#356fb5',width:2.5},name:D.names[S.method]});
  }
- const observed={x:c.observations.map(o=>o.x),y:c.observations.map(o=>o.y),mode:'markers',cliponaxis:false,marker:{size:10,color:'#b5821e',line:{color:'#fff',width:2}},name:'Reported observations',hovertemplate:'Input: %{x}<br>Reported: %{y:.5g}<extra>Historical observation</extra>'};
- const errs=c.observations.map(o=>o.error??o.source_error_bar??o.error_bar);if(errs.every(Number.isFinite)){observed.error_y={type:'data',array:errs,visible:true,color:'#b5821e',thickness:1};observed.name='Reported values (error bars undefined)';}
- traces.push(observed);
- if(r.point)traces.push({x:[r.point.x],y:[r.point.mean],mode:'markers',cliponaxis:false,marker:{symbol:'diamond',size:13,color:'#132238'},name:r.model==='observed'?'Measured condition meeting thresholds':'Candidate for validation'});
- const layout=plotBase(c),threshold=r.isProcess?r.auMax:r.target;
- if(Number.isFinite(threshold))layout.shapes=[{type:'line',x0:c.x.range[0],x1:c.x.range[1],y0:threshold,y1:threshold,line:{color:'#c69b3b',width:1.3,dash:'dot'}}];
- if(c.conditional_only&&!state.conditional)layout.xaxis.title.text='Numeric sample label (dosage unconfirmed)';
- Plotly.react('response-plot',traces,layout,plotConfig);
+ const obs={x:c.observations.map(p=>p.x),y:c.observations.map(p=>p.y),mode:'markers',marker:{size:9,color:'#b5821e',line:{color:'#fff',width:1.5}},name:'Reported observations',hovertemplate:'Input %{x:.5g}<br>Reported response %{y:.5g}<extra>Observation</extra>'};
+ if(c.observations.every(o=>Number.isFinite(o.error))){obs.error_y={type:'data',array:c.observations.map(o=>o.error),visible:true,color:'#b5821e',thickness:1};obs.name='Reported values + source error bars';}
+ traces.push(obs);
+ if(picked)traces.push({x:[picked.x],y:[picked.y],mode:'markers',marker:{symbol:'diamond',size:11,color:'#14263d'},name:'Inspected input'});
+ const layout=basePlot(axis(c.x),axis(c.y));layout.uirevision=c.id+'-'+S.method;
+ layout.xaxis.range=[...c.x.range];Plotly.react('model-plot',traces,layout,plotConfig);
 }
-function metricRows(metrics){if(Array.isArray(metrics))return metrics.map(x=>[x.model||x.name,x]);return Object.entries(metrics||{});}
-function drawValidation(c,r){
- const v=c.validation||{},rows=metricRows(v.metrics);$('#validation-note').textContent=v.scheme_zh||'One entire experimental condition is held out at a time. Endpoint folds predict beyond that fold’s training range. These small samples do not establish generalization across batches.';
- $('#validation-table').innerHTML=`<table><thead><tr><th>Method</th><th class="number">MAE</th><th class="number">RMSE</th><th class="number">Held-out conditions</th></tr></thead><tbody>${rows.map(([k,m])=>`<tr class="${k===state.model?'selected-model':''}"><td>${esc(D.names[k]||k)}</td><td class="number">${num(m.mae,5)}</td><td class="number">${num(m.rmse,5)}</td><td class="number">${m.n??c.observations.length}</td></tr>`).join('')}</tbody></table>`;
- const ranked=rows.filter(([,m])=>Number.isFinite(m.rmse)).sort((a,b)=>a[1].rmse-b[1].rmse);
- const tinyGap=ranked.length>1&&Math.abs(ranked[1][1].rmse-ranked[0][1].rmse)/Math.max(1e-12,ranked[1][1].rmse)<.01;
- $('#validation-conclusion').textContent=ranked.length?`${D.names[ranked[0][0]]||ranked[0][0]} has the lowest RMSE in this holdout comparison${ranked[0][0]!=='gp'?'; the Gaussian process does not outperform it':''}. ${tinyGap?'The top two are very close, so this does not establish model superiority. ':''}This is a retrospective comparison of only ${c.observations.length} conditions, without independent new experiments.`:'Insufficient results for a holdout comparison.';
- if(c.conditional_only&&!state.conditional)$('#validation-note').textContent='The diagnostics below assume numeric labels form a continuous variable. Their meaning remains unconfirmed. The current view compares observations only.';
+function renderModel(){
+ const c=activeCase(),rows=D.points(c,S.method);S.inspectIndex=Math.min(Math.max(0,S.inspectIndex),rows.length-1);
+ const picked=rows[S.inspectIndex];
+ $('#model-case').value=c.id;$('#model-method').value=S.method;
+ $('#model-title').textContent=c.title;$('#case-scope').textContent=c.scope;
+ $('#model-description').textContent=c.mode==='descriptive'?'Inspect the relationship between measured residual concentration and graph-reported capacity. This input is an outcome, so it is not offered as an operating control.':'Explore one local response series. Values follow the source study; transfer to different materials or operating conditions has not been validated.';
+ $('#model-band').checked=S.band;$('#model-band').disabled=S.method!=='gp';
+ $('#inspect-x').min='0';$('#inspect-x').max=String(Math.max(0,rows.length-1));$('#inspect-x').step='1';$('#inspect-x').value=String(S.inspectIndex);
+ $('#inspection-value').textContent=picked?n(picked.x,4)+(c.x.unit==='mass ratio'?'':' '+c.x.unit):'—';
+ $('#model-readout').innerHTML=picked?`<span class="eyebrow">${picked.observed?'Reported observation':'Model estimate at a grid input'}</span><strong>${n(picked.y,5)} <small>${esc(c.y.unit)}</small></strong><p>${picked.observed?'A reported setting in the source series.':picked.atMeasuredInput?'This input was previously measured, but the number above is still the model estimate.':'This intermediate input has not been independently tested.'}${Number.isFinite(picked.cu)?' Corresponding Cu: '+n(picked.cu,5)+' mg/L.':''}${picked.y<0?' This negative estimate has no physical capacity interpretation.':''}</p>`:'';
+ const ranked=Object.entries(c.validation.metrics).filter(([,m])=>Number.isFinite(m.rmse)).sort((a,b)=>a[1].rmse-b[1].rmse);
+ $('#model-facts').innerHTML=`<div class="metric"><span>Source settings</span><strong>${c.observations.length}</strong></div><div class="metric"><span>Independent repeats</span><strong>Not established</strong></div><div class="metric"><span>Lowest holdout RMSE</span><strong>${esc(D.names[ranked[0]?.[0]]||'—')}</strong></div>`;
+ $('#validation-table').innerHTML=table(['Method','MAE','RMSE','R²','Held-out settings'],Object.entries(c.validation.metrics).map(([key,m])=>[esc(D.names[key]||key),n(m.mae,5),n(m.rmse,5),n(m.r2,4),String(m.n??c.validation.n_settings)]));
+ $('#validation-note').textContent=c.validation.scheme+' Endpoint folds are extrapolations relative to their training fold. Small-sample or strongly processed source data can give misleadingly good retrospective fits; no external validation has been performed.';
+ $('#case-notes').innerHTML=c.notes.map(x=>'<li>'+esc(x)+'</li>').join('');
+ $('#model-to-trade').disabled=c.mode==='descriptive';$('#model-to-trade').textContent=c.mode==='descriptive'?'Descriptive relation — not an operating control':'Compare objectives for this study';
+ modelPlot(c,rows,picked);
 }
-function drawTradeoff(c,r){
- $('#tradeoff-section').hidden=!r.isProcess;if(!r.isProcess)return;
- $('#tradeoff-note').textContent=r.model==='observed'?(c.conditional_only?'Au/Cu records are provisionally aligned by matching labels; sample pairing is unconfirmed. Left means lower Au, up means higher Cu. Label magnitude does not establish material dosage.':'Left means lower reported Au; up means higher reported Cu. This compares observations, not product purity or a validated separation rate.'):'The curve compares model means. The Cu lower limit is a proxy constraint for retaining Cu, without a joint confidence guarantee.';
- const traces=[];if(r.model!=='observed')traces.push({x:r.points.map(p=>p.mean),y:r.points.map(p=>p.cu_mean),mode:'lines',line:{color:'#bfcddc',width:1.5},name:'Candidate-grid predictions'});
- traces.push({x:c.observations.map(o=>o.y),y:c.observations.map(o=>o.cu),text:c.observations.map(o=>`${o.x}${units(c)?' '+units(c):''}`),mode:'markers+text',textposition:'top center',textfont:{size:11},marker:{size:11,color:'#b35435',line:{color:'white',width:1}},name:'Reported value'});
- if(r.front?.length&&r.model!=='observed')traces.push({x:r.front.map(p=>p.mean),y:r.front.map(p=>p.cu_mean),mode:'markers',marker:{size:5,color:'#356fb5'},name:'Pareto candidates from model means'});
- if(r.point)traces.push({x:[r.point.mean],y:[r.point.cu_mean],mode:'markers',marker:{size:14,symbol:'diamond',color:'#132238'},name:'Candidate under current constraints'});
- Plotly.react('tradeoff-plot',traces,{...plotBase(c),margin:{l:70,r:20,t:45,b:60},xaxis:{title:{text:`Reported Au (${c.y.unit}) · lower preferred`},gridcolor:'#edf1f6',zeroline:false},yaxis:{title:{text:'Reported Cu (mg/L) · higher preferred'},gridcolor:'#edf1f6',zeroline:false},shapes:[]},plotConfig);
- const feasible=r.observedFeasible||[];$('#feasible-table').innerHTML=`<p class="footnote">Measured conditions meeting the current thresholds: ${feasible.length} / ${c.observations.length}. This comparison does not account for measurement uncertainty.</p>`;
+function tradeDefaults(){
+ const p=profile(),cases=p.caseIds.map(caseById);
+ $('#trade-case').value=p.id;$('#trade-method').value=S.tradeMethod;
+ $('#trade-caution').value='0';$('#trade-x-min').value=Number(Math.min(...cases.map(c=>c.x.range[0])).toPrecision(12));$('#trade-x-max').value=Number(Math.max(...cases.map(c=>c.x.range[1])).toPrecision(12));
+ $('#trade-target').value=p.target??95;$('#trade-au-max').value=p.auMax??.9;$('#trade-cu-min').value=p.cuMin??1;$('#trade-ref').value=p.reference??7;
+ ['first','second','third'].forEach((key,i)=>{$('#weight-'+key).value=p.weights[i]??0});S.manualKey=null;
 }
-function drawSource(c){$('#case-warnings').innerHTML=(c.warnings||[]).map(w=>`<li>${esc(listText(w))}</li>`).join('');}
-function drawCase(){
- const c=currentCase(),r=D.evaluate(c,options()),isProcess=c.group==='huo';state.recommendation=r;
- $('#case-title').textContent=c.title_zh;$('#case-description').textContent=c.conditional_only?'Compare reported Au/Cu by sample label. Label meanings and cross-table pairing need confirmation; continuous modelling is a conditional scenario.':isProcess?'Compare reported Au/Cu concentrations with material dosage within one dataset. Predictions apply only to this local demonstration.':'Use a historical composition-response curve to propose testable material choices. Transfer to the waste-liquid experiments is unproven.';$('#plot-title').textContent=c.conditional_only?(state.conditional?'Sample labels & concentration (dosage assumption)':'Sample labels & reported concentration'):isProcess?'Dosage & reported Au concentration':'How does composition affect Au uptake?';$('#sample-count').textContent=`${c.observations.length} source conditions`;
- $('#material-controls').hidden=isProcess;$('#process-controls').hidden=!isProcess;$('#channel-field').hidden=!c.channel_sensitivity;$('#case-gate').hidden=!c.conditional_only;$('#conditional-toggle').checked=state.conditional;$('#channel-select').value=state.channel;$('#model-select').value=state.model;$('#caution-select').value=String(state.caution);$('#target-label').textContent=state.target+'%';$('#target-slider').value=state.target;$('#au-max').value=Number.isFinite(state.auMax)?state.auMax:'';$('#cu-min').value=Number.isFinite(state.cuMin)?state.cuMin:'';$('#au-unit').textContent=`(${c.y.unit})`;
- $('#caution-select').disabled=r.model!=='gp';$('#model-select').disabled=c.conditional_only&&!state.conditional;$('#uncertainty-note').textContent=r.model==='gp'?'The band shows mean ±1.96 × model SD. Candidate screening uses your chosen conservatism. Neither has independent error calibration.':'This method has no calibrated prediction interval. GP standard deviations are not applied to other methods.';
- if(r.error){$('#recommendation-kind').textContent='Check thresholds';$('#recommended-x').textContent='—';$('#recommendation-text').textContent=r.error;$('#add-plan').disabled=true;$('#interpretation').textContent=r.error;drawResponse(c,{model:'observed',points:D.modelPoints(c,'observed'),isProcess});drawValidation(c,r);drawSource(c);$('#tradeoff-section').hidden=true;return;}
- drawResponse(c,r);drawTradeoff(c,r);drawValidation(c,r);drawSource(c);
- $('#recommendation-kind').textContent=!r.enabled?'Observed labels only':r.model==='observed'?'Measured condition meeting thresholds':`${D.names[r.model]} suggestion · To validate`;
- if(!r.enabled){$('#recommended-x').textContent=`${r.observedFeasible.length} labels meet thresholds`;$('#recommendation-text').textContent='The labels are not confirmed dosages. No minimum-dosage ranking or intermediate-label recommendation is supported.';}
- else if(r.point){$('#recommended-x').textContent=`${num(r.point.x)}${units(c)?' '+units(c):''}`;$('#recommendation-text').textContent=isProcess?`${r.model==='observed'?'Reported value':'Predicted value'}: Au ${num(r.point.mean,4)} ${c.y.unit}, Cu ${num(r.point.cu_mean,4)} mg/L. ${r.selectedIsObserved?'This input was measured before; prioritize an independent repeat.':'This candidate is unmeasured. Confirm preparation precision and experimental conditions.'}`:`Target ${num(r.target)} ${c.y.unit}. ${r.observedFeasible.length?`The lowest measured ratio meeting the target is ${num(r.observedFeasible[0].x)}. `:''}${r.selectedIsObserved?'The candidate is at a measured input.':'The model candidate has not been measured.'}`;}
- else{$('#recommended-x').textContent='No supported candidate';$('#recommendation-text').textContent='No candidate meets these thresholds under this model and conservatism. Adjust the target or constraints, or prioritize independent repeats.';}
- $('#add-plan').disabled=!r.point||c.conditional_only;$('#add-plan').textContent=c.conditional_only?'Confirm labels and units first':'Add to validation plan';
- $('#interpretation').textContent=(isProcess?'The model does not consistently beat simple baselines. A low reported Au concentration does not directly establish metallic-gold recovery.':'GP does not outperform PCHIP in whole-condition holdout. Recommendations are for planning validation only.')+(c.conditional_only?' Label meanings, cross-table pairing and measurement-channel selection remain unconfirmed.':'');
- $('#metric-strip').innerHTML=`<div class="metric"><span>${isProcess?'Lowest reported Au':'Highest measured uptake'}</span><strong>${num((isProcess?Math.min:Math.max)(...c.observations.map(o=>o.y)),4)} <small>${esc(c.y.unit)}</small></strong></div><div class="metric"><span>Current input range</span><strong>${num(c.x.range[0])}–${num(c.x.range[1])} <small>${esc(units(c))}</small></strong></div><div class="metric"><span>External validation</span><strong>Not yet performed</strong></div>`;
+function numberInput(id){return $('#'+id).value.trim()===''?NaN:Number($('#'+id).value);}
+function tradeOptions(method=S.tradeMethod){return {method,caution:numberInput('trade-caution'),min:numberInput('trade-x-min'),max:numberInput('trade-x-max'),targetPercent:numberInput('trade-target'),auMax:numberInput('trade-au-max'),cuMin:numberInput('trade-cu-min'),reference:numberInput('trade-ref'),weights:['first','second','third'].map(s=>numberInput('weight-'+s))};}
+function selectedCandidate(){return S.trade?.front.find(p=>p.key===S.manualKey)||S.trade?.candidate||null;}
+function objectivePlot(r){
+ const p=profile(),kind=p.kind,c=caseById(p.caseIds[0]),traces=[],labels=['#356fb5','#2e8b77'];
+ const coord=q=>kind==='dose'?[q.y,q.cu]:[q.demand,q.y];
+ for(const [i,cid] of p.caseIds.entries()){
+  const set=r.all.filter(q=>q.caseId===cid),xy=set.map(coord);
+  traces.push({x:xy.map(v=>v[0]),y:xy.map(v=>v[1]),mode:S.tradeMethod==='observed'?'markers':'lines',name:caseById(cid).title,line:{color:labels[i%labels.length],width:1.5},marker:{size:7,color:labels[i%labels.length]},customdata:set.map(q=>[q.x,q.label]),hovertemplate:'Input %{customdata[0]:.5g}<br>%{customdata[1]}<br>x %{x:.5g}, y %{y:.5g}<extra></extra>'});
+ }
+ if(S.tradeMethod!=='observed'){
+  const observed=p.caseIds.flatMap(id=>D.points(caseById(id),'observed')).filter(q=>q.x>=numberInput('trade-x-min')&&q.x<=numberInput('trade-x-max')).map(q=>({...q,demand:kind==='ph'?Math.abs(q.x-r.reference):kind==='potential'?Math.abs(q.x):q.x}));
+  const xy=observed.map(coord);
+  traces.push({x:xy.map(v=>v[0]),y:xy.map(v=>v[1]),mode:kind==='dose'?'markers+text':'markers',text:observed.map(q=>n(q.x)+' '+(c.x.unit==='mass ratio'?'':c.x.unit)),textposition:'top center',textfont:{size:10},marker:{size:8,color:'#b35435',line:{color:'#fff',width:1}},name:'Reported settings',customdata:observed.map(q=>[q.x,q.label]),hovertemplate:'Reported input %{customdata[0]:.5g}<br>%{customdata[1]}<br>x %{x:.5g}, y %{y:.5g}<extra>Observation</extra>'});
+ }
+ if(r.front.length){const xy=r.front.map(coord);traces.push({x:xy.map(v=>v[0]),y:xy.map(v=>v[1]),mode:'markers',name:'Feasible Pareto candidates',marker:{size:6,color:'#b5821e'},customdata:r.front.map(q=>q.x),hovertemplate:'Input %{customdata:.5g}<br>x %{x:.5g}, y %{y:.5g}<extra>Pareto candidate</extra>'});}
+ const best=selectedCandidate();if(best){const xy=coord(best);traces.push({x:[xy[0]],y:[xy[1]],mode:'markers',name:'Selected candidate',marker:{size:13,symbol:'diamond',color:'#14263d'},hovertemplate:'Selected input '+n(best.x,4)+'<extra></extra>'});}
+ const xlabel=kind==='dose'?'Reported Au ('+c.y.unit+') · lower preferred':kind==='ph'?'Distance from pH '+n(r.reference)+' · smaller preferred':kind==='potential'?'Reported |E| (V) · smaller preferred':'CS:GO ratio · lower preferred';
+ const ylabel=kind==='dose'?'Reported Cu (mg/L) · higher preferred':c.y.label+' ('+c.y.unit+') · higher preferred';
+ const layout=basePlot(xlabel,ylabel);layout.uirevision=p.id+'-'+S.tradeMethod;
+ Plotly.react('trade-plot',traces,layout,plotConfig);
 }
-
-function saveCandidate(){const c=currentCase(),p=state.recommendation?.point;if(!p||c.conditional_only)return;const key=`${c.id}/${state.model}/${p.x}`,observed=state.model==='observed',historic=D.knownPoint(c,p.x);if(!state.plan.some(r=>r.key===key))state.plan.push({key,case_id:c.id,source_case:c.title_zh,input:p.x,unit:units(c),method:D.names[state.model],reported_target:c.y.label,evidence_kind:observed?'reported_measurement':'model_prediction',observed_result:historic?.y??null,predicted_result:observed?null:p.mean,status:'proposed_not_executed',joint_prediction_available:false});$('#add-plan').textContent='Added to validation plan';}
+function renderTrade(){
+ const p=profile(),c=caseById(p.caseIds[0]);
+ $('#trade-title').textContent=p.title;$('#trade-description').textContent=p.description;$('#trade-warning').textContent=p.warning;
+ $('#response-constraints').hidden=p.kind==='dose';$('#dose-constraints').hidden=p.kind!=='dose';$('#ph-preference').hidden=p.kind!=='ph';$('#weight-third-field').hidden=p.kind!=='dose';
+ $('#trade-caution').disabled=S.tradeMethod!=='gp';
+ ['first','second','third'].forEach((key,i)=>{$('#weight-'+key+'-label').textContent=(p.objectives[i]||'Unused')+' · '+$('#weight-'+key).value});
+ try{
+  S.trade=D.optimise(DATA.cases,p,tradeOptions());const r=S.trade,chosen=selectedCandidate();
+  $('#trade-summary').innerHTML=`<div class="metric"><span>In-range candidates</span><strong>${r.all.length}</strong></div><div class="metric"><span>Meet constraints</span><strong>${r.feasible.length}</strong></div><div class="metric"><span>On Pareto front</span><strong>${r.front.length}</strong></div><p class="muted">${p.kind==='dose'?'Constraints screen Au and Cu separately.':'Minimum response: '+n(r.target,4)+' '+esc(c.y.unit)+'.'} Weights rank the feasible Pareto set after scaling each objective over the current candidate range. ${r.z?'Screening uses '+r.z+' × GP model SD; ranking still compares means.':'Screening uses reported values or predicted means.'} ${r.excludedNegative?r.excludedNegative+' negative model predictions were excluded from decision candidates.':''}</p>`;
+  $('#candidate-summary').innerHTML=chosen?`<span class="eyebrow">${chosen.observed?'Reported setting meeting preferences':'Model candidate — requires validation'}</span><strong>${n(chosen.x,4)} ${esc(c.x.unit==='mass ratio'?'':c.x.unit)}</strong><p>${esc(chosen.label)}<br>Response: ${n(chosen.y,5)} ${esc(c.y.unit)}${Number.isFinite(chosen.cu)?'; Cu: '+n(chosen.cu,5)+' mg/L':''}. ${chosen.atMeasuredInput?'The input is already represented in the source data.':'Choose practically achievable settings before a new experiment.'}</p>`:'<strong>No supported candidate</strong><p>No evaluated point satisfies these constraints. Review the targets or obtain additional measurements; the search does not extend beyond the source range.</p>';
+  $('#add-candidate').disabled=!chosen;
+  const front=r.front.slice(0,12);$('#trade-table').innerHTML=table(['Candidate','Study','Response','Secondary objective','Relative score',''],front.map(q=>[n(q.x,4)+' '+esc(c.x.unit==='mass ratio'?'':c.x.unit),esc(q.label),n(q.y,5),p.kind==='dose'?'Cu '+n(q.cu,5)+' mg/L':n(q.demand,4),n(q.score,4),`<button type="button" class="small-button" data-pick="${esc(q.key)}">Inspect</button>`]))+'<p class="footnote">The table shows up to 12 candidates ranked by the current priorities. Fine digits reflect the calculation grid, not preparation precision.</p>';
+  $$('#trade-table [data-pick]').forEach(button=>button.addEventListener('click',()=>{S.manualKey=button.dataset.pick;renderTrade()}));
+  const comparison=Object.keys(D.names).map(method=>{const result=D.optimise(DATA.cases,p,tradeOptions(method)),q=result.candidate;return[esc(D.names[method]),q?n(q.x,4):'None',q?esc(q.label):'—',String(result.feasible.length),method==='gp'?'Uses selected model-SD screening':'No uncertainty band applied'];});
+  $('#trade-comparison').innerHTML=table(['Method','Preferred input','Study','Feasible candidates','Screening'],comparison);
+  objectivePlot(r);
+ }catch(error){S.trade=null;$('#trade-summary').innerHTML='<p class="note">'+esc(error.message)+'</p>';$('#candidate-summary').textContent='Check the input settings.';$('#add-candidate').disabled=true;$('#trade-table').innerHTML='';$('#trade-comparison').innerHTML='';Plotly.react('trade-plot',[],basePlot('',''),plotConfig);}
+}
+function addCandidate(){
+ const p=selectedCandidate();if(!p)return;const c=caseById(p.caseId),key=p.key;
+ if(!S.memo.some(m=>m.key===key))S.memo.push({key,caseId:c.id,title:c.title,category:c.category,input:p.x,unit:c.x.unit,method:D.names[S.tradeMethod],evidence:p.observed?'Reported observation':'Model prediction',response:p.y,profileId:S.tradeId});
+ $('#add-candidate').textContent='Added to candidate memo';
+}
+function readPlan(){return {ratios:$('#plan-ratios').value,doses:$('#plan-doses').value,phLevels:$('#plan-ph').value,blocks:$('#plan-blocks').value,metadata:{batch:$('#meta-batch').value,recipe:$('#meta-recipe').value,volume_ml:$('#meta-volume').value,ph:$('#meta-ph').value,contact_min:$('#meta-time').value,temperature_c:$('#meta-temp').value}};}
+function renderMemo(){
+ $('#plan-memo').innerHTML=S.memo.length?table(['Study','Input','Method','Evidence'],S.memo.map(m=>[esc(m.title),n(m.input,4)+' '+esc(m.unit==='mass ratio'?'':m.unit),esc(m.method),esc(m.evidence)])):'<p class="muted">Add a candidate from Multi-objective to retain it for this page session.</p>';
+ $('#include-candidates').disabled=!S.memo.some(m=>['kou_cs_go_ratio','huo_20260518_dose'].includes(m.caseId));
+ $('#clear-memo').disabled=!S.memo.length;
+}
 function renderPlan(){
- $('#plan-view').innerHTML=`<div class="eyebrow">Next experiments</div><h1>Connect materials and process with new experiments</h1><div class="note">The two models describe different experimental systems. Their combination here is a proposed experiment matrix with <strong>no joint performance prediction</strong>. Model outputs are not multiplied. Every row is marked as not executed.</div><div class="plan-layout"><div><h2>Set factor levels to test</h2><label class="field-label" for="plan-ratios">CS:GO mass ratio (comma-separated, 0–20)</label><input id="plan-ratios" value="5, 10, 20"><label class="field-label" for="plan-doses">GO/CS dosage in mg (5–20)</label><input id="plan-doses" value="5, 10, 20"><label class="field-label" for="plan-blocks">Independent treatment blocks</label><input id="plan-blocks" type="number" min="1" max="10" value="3"><p class="footnote">Each block contains all combinations and one no-adsorbent control. Run order is randomized within each block using a fixed seed. Repeated readings cannot replace independent treatments.</p><h2 class="spaced">Specify fixed conditions</h2><div class="metadata-grid"><label>Stock-solution batch<input id="meta-batch" placeholder="Required"></label><label>Material preparation<input id="meta-recipe" placeholder="Required"></label><label>Liquid volume (mL)<input id="meta-volume" type="number" min="0" placeholder="Required"></label><label>pH<input id="meta-ph" type="number" min="0" max="14" step="0.1" placeholder="Required"></label><label>Contact time (min)<input id="meta-time" type="number" min="0" placeholder="Required"></label><label>Temperature (°C)<input id="meta-temp" type="number" step="0.1" placeholder="Required"></label></div><button class="primary" id="generate-plan">Generate experiment draft</button><p id="plan-error" role="alert"></p></div><div><h2>Candidate memo</h2>${state.plan.length?`<div class="table-scroll"><table><thead><tr><th>Source</th><th>Candidate</th><th>Method</th></tr></thead><tbody>${state.plan.map(r=>`<tr><td>${esc(r.source_case)}</td><td>${num(r.input)} ${esc(r.unit)}</td><td>${esc(r.method)}</td></tr>`).join('')}</tbody></table></div>`:'<div class="empty">Add candidates from Materials or Process, or set the matrix independently.</div>'}<div class="plan-summary" id="plan-summary"></div><div id="plan-table" class="table-scroll"></div><p class="footnote">Record initial and final Au/Cu concentrations, units and measurement channels during the actual experiments. The on-screen draft does not mean experiments are complete or the plan is validated.</p></div></div>`;
- if(state.plan.length){const add=document.createElement('button');add.className='secondary';add.id='include-candidates';add.textContent='Include memo candidates in factor levels';$('#plan-summary').before(add);add.addEventListener('click',()=>{const ratios=$('#plan-ratios').value.split(/[,，;；\s]+/).filter(Boolean).map(Number),doses=$('#plan-doses').value.split(/[,，;；\s]+/).filter(Boolean).map(Number);for(const item of state.plan){const source=DATA.cases.find(c=>c.id===item.case_id);if(source?.group==='kou')ratios.push(item.input);if(source?.group==='huo'&&source.x.meaning_confirmed)doses.push(item.input)}$('#plan-ratios').value=[...new Set(ratios)].sort((a,b)=>a-b).join(', ');$('#plan-doses').value=[...new Set(doses)].sort((a,b)=>a-b).join(', ');generatePlan()})}; if(state.planForm){const f=state.planForm;$('#plan-ratios').value=f.ratios;$('#plan-doses').value=f.doses;$('#plan-blocks').value=f.repeats;for(const [id,key] of [['batch','batch'],['recipe','recipe'],['volume','volume_ml'],['ph','ph'],['time','contact_min'],['temp','temperature_c']])$('#meta-'+id).value=f.metadata[key]??'';}
- $('#generate-plan').addEventListener('click',generatePlan);generatePlan();
+ renderMemo();if(S.planForm){const p=S.planForm;$('#plan-ratios').value=p.ratios;$('#plan-doses').value=p.doses;$('#plan-ph').value=p.phLevels;$('#plan-blocks').value=p.blocks;for(const [id,key] of [['batch','batch'],['recipe','recipe'],['volume','volume_ml'],['ph','ph'],['time','contact_min'],['temp','temperature_c']])$('#meta-'+id).value=p.metadata[key]??'';}
+ generatePlan();
 }
-function readPlanForm(){return{ratios:$('#plan-ratios').value,doses:$('#plan-doses').value,repeats:$('#plan-blocks').value,metadata:{batch:$('#meta-batch').value,recipe:$('#meta-recipe').value,volume_ml:$('#meta-volume').value,ph:$('#meta-ph').value,contact_min:$('#meta-time').value,temperature_c:$('#meta-temp').value}};}
-function generatePlan(){try{
- state.planForm=readPlanForm();state.matrix=D.makePlan(state.planForm);$('#plan-error').textContent='';const p=state.matrix;
- $('#plan-summary').innerHTML=`<div class="metric-strip"><div class="metric"><span>Factor combinations</span><strong>${p.conditions}</strong></div><div class="metric"><span>Controls</span><strong>${p.controls}</strong></div><div class="metric"><span>Total treatments</span><strong>${p.rows.length}</strong></div></div><p class="${p.missing.length?'note':'result-note'}">${p.missing.length?`The draft is missing ${p.missing.length} fixed conditions. Discuss this draft before execution; it is not an executable protocol.`:'Fixed conditions are filled in. Experimental feasibility and the measurement protocol still need review. All records remain proposed experiments.'}</p>`;
- $('#plan-table').innerHTML=`<table><thead><tr><th>ID</th><th>Block</th><th>CS:GO</th><th>Dosage (mg)</th><th>Type</th></tr></thead><tbody>${p.rows.map(r=>`<tr><td>${r.experiment_id}</td><td>${r.block}</td><td>${r.ratio_cs_go===''?'N/A':num(r.ratio_cs_go)}</td><td>${num(r.gocs_dose_mg)}</td><td>${r.kind==='no_adsorbent_control'?'No-adsorbent control':'Proposed combination'}</td></tr>`).join('')}</tbody></table>`;
- }catch(e){state.matrix=null;$('#plan-error').textContent=e.message;$('#plan-summary').innerHTML='';$('#plan-table').innerHTML='';}}
+function generatePlan(){
+ S.planForm=readPlan();
+ try{S.plan=D.makePlan(S.planForm);const p=S.plan;$('#plan-error').textContent='';
+  $('#plan-summary').innerHTML=`<div class="metric"><span>Factor combinations</span><strong>${p.conditions}</strong></div><div class="metric"><span>Matched controls</span><strong>${p.controls}</strong></div><div class="metric"><span>Total treatment units</span><strong>${p.rows.length}</strong></div><p class="note">${esc(p.status)}${p.missing.length?' · '+p.missing.length+' required fields missing.':'.'} These are proposed experiments, with no joint performance prediction.${p.variedPH?' A no-adsorbent control is included at every proposed solution-pH level in every block.':''}</p>`;
+  $('#plan-table').innerHTML=table(['Run','Block','CS:GO','Dosage (mg)','Proposed solution pH','Type'],p.rows.map(r=>[r.id,String(r.block),r.ratio===null?'N/A':n(r.ratio),n(r.dose),r.ph===''?'To specify':n(r.ph),esc(r.kind)]));
+ }catch(error){S.plan=null;$('#plan-error').textContent=error.message;$('#plan-summary').innerHTML='';$('#plan-table').innerHTML='';}
+}
+function includeCandidates(){
+ try{const ratios=D.parseLevels($('#plan-ratios').value,0,20),doses=D.parseLevels($('#plan-doses').value,5,20);for(const m of S.memo){if(m.caseId==='kou_cs_go_ratio')ratios.push(m.input);if(m.caseId==='huo_20260518_dose')doses.push(m.input)}$('#plan-ratios').value=[...new Set(ratios)].sort((a,b)=>a-b).join(', ');$('#plan-doses').value=[...new Set(doses)].sort((a,b)=>a-b).join(', ');generatePlan();}catch(error){$('#plan-error').textContent=error.message;}
+}
 function renderEvidence(){
- const rows=DATA.cases.map(c=>{const m=c.validation.metrics;return `<tr><td>${esc(c.title_zh)}</td><td>${c.observations.length}</td><td>${num(m.gp.rmse,5)}</td><td>${num(m.mean?.rmse,5)}</td><td>Not yet validated</td></tr>`}).join('');
- $('#evidence-view').innerHTML=`<div class="eyebrow">Research presentation</div><h1>What do these results support?</h1><div class="evidence-lead"><strong>Implemented:</strong> Local surrogate models, whole-condition holdout, constrained candidate selection and a prospective experiment plan.<br><strong>Not established:</strong> Reliable prediction across batches, consistent superiority over simple baselines, or experimentally improved metallic-gold recovery.</div><h2 class="spaced">One workflow, three evidence states</h2><div class="claim-row"><span><b class="claim observed">Observed</b> Reported experimental measurements</span><span><b class="claim predicted">Predicted</b> Model outputs under stated assumptions</span><span><b class="claim proposed">Proposed</b> Experiments not yet performed</span></div><div class="table-scroll"><table><thead><tr><th>Case</th><th>Source conditions</th><th>GP LOO RMSE</th><th>Mean-baseline RMSE</th><th>New experiments</th></tr></thead><tbody>${rows}</tbody></table></div><p class="muted">Cases have different units and tasks, so their RMSE values cannot be compared directly. Holding out complete conditions keeps measurement channels from the same sample together; it is still not validation across independent batches.</p><h2 class="spaced">Information still needed</h2><ul class="evidence-list"><li>The meaning and units of the unconfirmed sample labels, and whether paired Au/Cu reports describe the same samples.</li><li>Solution batches, volume, material preparation, pH, temperature, contact time and independent repeats.</li><li>Calibration, dilution, analytical-channel selection, detection limits and the definition of error bars.</li><li>Independent new experiments to test the candidate conditions against a prespecified baseline.</li></ul><h2 class="spaced">Modelling scope</h2><p>Models were trained offline on CPU. Candidate selection updates interactively within the displayed input ranges. Material and process cases remain separate; their outputs are not multiplied into a joint performance estimate. Electrochemical and computational studies provide background but are not joined to training cases without reliable sample-level links.</p><p class="footnote">This presentation provides on-screen results only. Original files and research attachments are not distributed here.</p>`;
- const sensitivity=(DATA.noise_summary||[]).filter(r=>r.screen==='model_band_constraints');
- if(sensitivity.length){const table=sensitivity.map(r=>{const mean=(DATA.noise_summary||[]).find(x=>x.case_id===r.case_id&&x.scenario===r.scenario&&x.screen==='mean_constraints');return `<tr><td>${r.case_id==='huo_20260518_dose'?'Dose-response case':'Unconfirmed-label case'}</td><td>${esc(r.scenario)}</td><td>Au ≤ ${num(r.thresholds.au_max)}; Cu ≥ ${num(r.thresholds.cu_min)}</td><td>${num(mean?.candidate_x)}</td><td>${r.feasible_count}</td></tr>`}).join('');$('#evidence-view').insertAdjacentHTML('beforeend',`<h2 class="spaced">Do suggestions change with assumed noise?</h2><p class="muted">These fixed offline example thresholds are independent of the current Process settings. Noise SDs of 0.005 and 0.01 in reported units are assumptions, not measured errors.</p><div class="table-scroll"><table><thead><tr><th>Case</th><th>Noise scenario</th><th>Fixed thresholds</th><th>Input selected by mean screening</th><th>Feasible grid points at 1.96σ</th></tr></thead><tbody>${table}</tbody></table></div><p class="note">A model band narrower than the reporting resolution does not imply greater measurement precision. If a candidate depends on the noise assumption, prioritize independent repeats.</p>`);}
+ const rows=DATA.cases.map(c=>{const m=c.validation.metrics;return [esc(c.title),String(c.observations.length),esc(c.y.unit),n(m.gp?.rmse,5),n(m.pchip?.rmse,5),c.mode==='descriptive'?'Descriptive only':'Local candidate comparison'];});
+ $('#evidence-content').innerHTML=`<div class="eyebrow">Evidence and interpretation</div><h1>More data, with the original study boundaries retained</h1><p class="lead">${DATA.cases.length} local response series contain ${DATA.cases.reduce((s,c)=>s+c.observations.length,0)} source settings in total. This is an inventory count across different studies, not a pooled training set or a known count of independent experiments.</p><div class="source-grid">${DATA.evidence.map(e=>`<article class="source-item"><span class="tag">${esc(e.status)}</span><h2>${esc(e.title)}</h2><p>${esc(e.detail)}</p></article>`).join('')}</div><h2>Retrospective model checks</h2><div class="table-scroll">${table(['Response series','Source settings','Response unit','GP RMSE','PCHIP RMSE','Decision scope'],rows)}</div><p class="muted">RMSE has the response units shown in each row and cannot be compared across studies with different units. Entire input settings are held out. Source processing, missing repeats and endpoint extrapolation limit what these scores establish.</p><h2>How to interpret a candidate</h2><ol class="evidence-list"><li>Measurements, model estimates and proposed experiments remain distinct.</li><li>The Pareto set is computed only within the selected local study and measured input range, after the stated constraints.</li><li>Priority weights rank trade-offs; they do not prove a unique scientific optimum. No candidate has been verified by a new experiment.</li><li>Distance from a pH reference and reported potential magnitude are preferences, not reagent consumption, energy or cost.</li><li>Concentration decreases are not metallic-gold yields. Recovery needs matched feed and product measurements and a material balance.</li></ol><p class="note">${esc(DATA.privacy_note)}</p>`;
 }
-function render(){
- const inGuide=state.view==='guide';
- $$('.tab').forEach(b=>{b.classList.toggle('active',b.dataset.view===state.view);b.setAttribute('aria-current',b.dataset.view===state.view?'page':'false')});
- $('#workspace').hidden=!['material','process'].includes(state.view);
- $('#plan-view').hidden=state.view!=='plan';$('#evidence-view').hidden=state.view!=='evidence';
- $('#guide-view').hidden=!inGuide;$('#guide-intro').hidden=inGuide;
- $$('[data-open-guide]').forEach(b=>b.setAttribute('aria-expanded',String(inGuide)));
- if(inGuide)return;
- if(state.view==='plan')renderPlan();else if(state.view==='evidence')renderEvidence();else{refreshSelect();drawCase();}
-}
-$$('.tab').forEach(b=>b.addEventListener('click',()=>showView(b.dataset.view)));$('#case-select').addEventListener('change',e=>{resetCase(e.target.value);drawCase()});$('#model-select').addEventListener('change',e=>{state.model=e.target.value;drawCase()});$('#target-slider').addEventListener('input',e=>{state.target=+e.target.value;drawCase()});$('#caution-select').addEventListener('change',e=>{state.caution=+e.target.value;drawCase()});$('#conditional-toggle').addEventListener('change',e=>{state.conditional=e.target.checked;drawCase()});$('#channel-select').addEventListener('change',e=>{state.channel=e.target.value;drawCase()});$('#au-max').addEventListener('input',e=>{state.auMax=e.target.value===''?NaN:+e.target.value;drawCase()});$('#cu-min').addEventListener('input',e=>{state.cuMin=e.target.value===''?NaN:+e.target.value;drawCase()});$('#add-plan').addEventListener('click',saveCandidate);
-let guideReturnView='material';
 function showView(next){
- if(!['material','process','plan','evidence','guide'].includes(next))return;
- const wasGuide=state.view==='guide';
- if(state.view==='plan'&&$('#plan-ratios'))state.planForm=readPlanForm();
- if(next==='guide'&&!wasGuide)guideReturnView=state.view;
- state.view=next;render();
- if(next==='guide'){
-  history.replaceState(null,'',location.pathname+location.search+'#instructions');
-  $('#guide-title').focus();
- }else if(wasGuide){
-  history.replaceState(null,'',location.pathname+location.search);
-  const heading=next==='plan'?$('#plan-view h1'):next==='evidence'?$('#evidence-view h1'):$('#case-title');
-  heading?.setAttribute('tabindex','-1');heading?.focus();
- }
+ if(!['models','trade','plan','evidence','guide'].includes(next))return;
+ if(S.view==='plan')S.planForm=readPlan();
+ if(next==='guide'&&S.view!=='guide')S.lastView=S.view;
+ const wasGuide=S.view==='guide';S.view=next;
+ for(const key of ['models','trade','plan','evidence','guide'])$('#'+key+'-view').hidden=key!==next;
+ $$('[data-view]').forEach(b=>{b.classList.toggle('active',b.dataset.view===next);b.setAttribute('aria-current',b.dataset.view===next?'page':'false')});
+ $('#guide-open').setAttribute('aria-expanded',String(next==='guide'));
+ if(next==='models')renderModel();if(next==='trade')renderTrade();if(next==='plan')renderPlan();if(next==='evidence')renderEvidence();
+ if(next==='guide')history.replaceState(null,'',location.pathname+location.search+'#instructions');else if(wasGuide)history.replaceState(null,'',location.pathname+location.search);
 }
-$$('[data-open-guide]').forEach(button=>button.addEventListener('click',()=>showView('guide')));
-$('#close-guide').addEventListener('click',()=>showView(guideReturnView));
-$$('[data-guide-view]').forEach(button=>button.addEventListener('click',()=>showView(button.dataset.guideView)));
-if(location.hash==='#instructions')state.view='guide';
-
-render();
+optionGroups();tradeDefaults();
+$$('[data-view]').forEach(b=>b.addEventListener('click',()=>showView(b.dataset.view)));
+$('#guide-open').addEventListener('click',()=>showView('guide'));$('#guide-close').addEventListener('click',()=>showView(S.lastView));
+$('#model-case').addEventListener('change',e=>{S.caseId=e.target.value;S.inspectIndex=0;renderModel()});
+$('#model-method').addEventListener('change',e=>{S.method=e.target.value;S.inspectIndex=0;renderModel()});
+$('#model-band').addEventListener('change',e=>{S.band=e.target.checked;renderModel()});$('#inspect-x').addEventListener('input',e=>{S.inspectIndex=+e.target.value;renderModel()});
+$('#model-to-trade').addEventListener('click',()=>{const p=DATA.profiles.find(p=>p.caseIds.includes(S.caseId));if(p){S.tradeId=p.id;S.tradeMethod=S.method;tradeDefaults();showView('trade')}});
+$('#trade-case').addEventListener('change',e=>{S.tradeId=e.target.value;tradeDefaults();renderTrade()});
+$('#trade-method').addEventListener('change',e=>{S.tradeMethod=e.target.value;S.manualKey=null;renderTrade()});
+for(const id of ['trade-caution','trade-x-min','trade-x-max','trade-target','trade-au-max','trade-cu-min','trade-ref','weight-first','weight-second','weight-third'])$('#'+id).addEventListener('input',()=>{S.manualKey=null;$('#add-candidate').textContent='Add to candidate memo';renderTrade()});
+$('#trade-reset').addEventListener('click',()=>{tradeDefaults();renderTrade()});$('#add-candidate').addEventListener('click',addCandidate);
+$('#generate-plan').addEventListener('click',generatePlan);$('#include-candidates').addEventListener('click',includeCandidates);$('#clear-memo').addEventListener('click',()=>{S.memo=[];renderMemo()});
+showView(location.hash==='#instructions'?'guide':'models');

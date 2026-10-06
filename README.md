@@ -4,6 +4,13 @@ An English interactive presentation of real research observations and local
 models. Open index.html locally or use GitHub Pages from main / (root).
 Use the Instructions button for the visitor guide, or open #instructions.
 
+The expanded presentation covers composition, pH, residual-concentration
+relationships, dosage and applied potential as separate local series. The two
+membrane pH categories share one source figure and can be compared under an
+explicit protocol-comparability assumption. Residual concentration is a measured
+outcome and is excluded from operating decisions. Reported pH preferences and
+potential magnitudes are not reagent costs or energy measurements.
+
 The site provides charts, model comparisons, constrained candidate screening
 and a prospective experiment plan. It does not provide original datasets,
 source documents, report attachments, CSV exports or chart-export controls.
