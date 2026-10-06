@@ -11,6 +11,14 @@ explicit protocol-comparability assumption. Residual concentration is a measured
 outcome and is excluded from operating decisions. Reported pH preferences and
 potential magnitudes are not reagent costs or energy measurements.
 
+Response models hands the chosen source category and method to Multi-objective.
+Available metrics can be objectives, constraints, both or unused, with minimum,
+maximum or target-distance goals. Exact grid search and seeded NSGA-II both
+evaluate the same stored surrogate-candidate catalogue. NSGA-II reports actual
+visited coverage and a non-dominated archive; it is not continuous global
+optimisation or new model training. Optional preference weights rank the search
+result separately and do not change the Pareto search.
+
 The site provides charts, model comparisons, constrained candidate screening
 and a prospective experiment plan. It does not provide original datasets,
 source documents, report attachments, CSV exports or chart-export controls.
